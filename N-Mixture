@@ -1,0 +1,202 @@
+## N-Mixture with Grumeti Data ## 
+
+# set workspace 
+library(unmarked); library(plyr); library(reshape); library(lubridate)
+
+# load data 
+data <- read.csv("grumeti_prepped.csv")
+effort <- read.csv("grumeti_effort.csv")
+names(effort)[1] <- "date"
+traits <- read.csv("../Species_Traits.csv")
+grumeti <- read.csv("grumeti_counts.csv") #aerial survey counts 
+subsamp20 <- read.csv("../../grumeti_20subsample.csv", na.strings=c("", "NA")) #subsets of overall camera trap grid to meet assumptions of one camera trap per home range 
+
+# select parameters
+species <- "buffalo"
+distribution <- "ZIP" 
+
+# data for subsample 
+for(i in 1:nrow(subsamp20)){
+  x <- as.vector(subsamp20[i,c(2:5)])
+  subsamp20$select[i] <- sample(x[!is.na(x)], 1)
+}
+keep <- as.vector(subsamp20[["select"]])
+data <- data[data$site %in% keep,]  
+
+# habitat classificatioms
+hab <- read.csv("grumeti_habitat.csv")
+hab <- hab[hab$site %in% keep,]
+
+# summarize data by week
+sppsub <- data[data$species == species,]
+
+#all 
+sub <- ddply(sppsub, .(date, site), summarise, count = sum(count))
+sub <- merge(effort, sub, all.x=T)
+sub[is.na(sub)] <- 0
+sub$week <- week(sub$date) 
+sub <- ddply(sub, .(site, week), summarise, count = sum(count))
+
+#day 
+day <- sppsub[sppsub$period == "day",]
+day <- ddply(day, .(date, site), summarise, count = sum(count))
+day <- merge(effort, day, all.x=T)
+day[is.na(day)] <- 0
+day$week <- week(day$date)
+day <- ddply(day, .(site, week), summarise, count = sum(count))
+
+#night
+night <- sppsub[sppsub$period == "night",]
+night <- ddply(night, .(date, site), summarise, count = sum(count))
+night <- merge(effort, night, all.x=T)
+night[is.na(night)] <- 0
+night$week <- week(night$date)
+night <- ddply(night, .(site, week), summarise, count = sum(count))
+
+# need same number of rows for each site; add NAs 
+mindate <- min(sub$week); maxdate <- max(sub$week)
+allweeks <- seq(mindate, maxdate)
+sites <- unique(sub$site)
+sites.long <- rep(sites, each=length(allweeks))
+allweeks.long <- rep(allweeks, times=length(sites))
+fulldat <- cbind(as.character(sites.long), as.numeric(allweeks.long))
+fulldat <- data.frame(fulldat)
+names(fulldat) <- c("site", "week")
+
+# format data for unmarked
+sub <- merge(fulldat, sub, all.x=T)
+
+fulldat.hab <- merge(fulldat, hab, all.x=T)
+sub.hab <- merge(fulldat.hab, sub, all.x=T)
+sub.wood <- sub.hab[sub.hab$habitat == "woodlands",]
+sub.plain <- sub.hab[sub.hab$habitat == "plains",]
+
+#sub
+sub <- reshape(sub, idvar="site", timevar="week", direction="wide")
+sub <- merge(sub, hab, all.x=T)
+sub <- sub[!is.na(sub$habitat),]
+siteCovsSub <- data.frame(habitat = sub$habitat)
+
+sub <- unmarkedFramePCount(y = sub[,2:14],
+                           siteCovs=siteCovsSub, obsCovs=NULL)
+
+#woods
+sub.wood <- sub.wood[!is.na(sub.wood$habitat),]
+sub.wood$habitat <- NULL
+sub.wood <- reshape(sub.wood, idvar="site", timevar="week", direction="wide")
+sub.wood <- unmarkedFramePCount(y = sub.wood[,2:14],
+                                siteCovs=NULL, obsCovs=NULL)
+
+#plains
+sub.plain <- sub.plain[!is.na(sub.plain$habitat),]
+sub.plain$habitat <- NULL
+sub.plain <- reshape(sub.plain, idvar="site", timevar="week", direction="wide")
+sub.plain <- unmarkedFramePCount(y = sub.plain[,2:14],
+                                 siteCovs=NULL, obsCovs=NULL)
+
+#day
+day <- merge(fulldat, day, all.x=T)
+day <- reshape(day, idvar="site", timevar="week", direction="wide")
+day <- merge(day, hab, all.x=T)
+day <- day[!is.na(day$habitat),]
+siteCovsDay <- data.frame(habitat = day$habitat)
+
+day <- unmarkedFramePCount(y = day[,2:14],
+                           siteCovs=siteCovsDay, obsCovs=NULL)
+
+#night
+night <- merge(fulldat, night, all.x=T)
+night <- reshape(night, idvar="site", timevar="week", direction="wide")
+night <- merge(night, hab, all.x=T)
+night <- night[!is.na(night$habitat),]
+siteCovsNight <- data.frame(habitat = night$habitat)
+
+day <- unmarkedFramePCount(y = night[,2:14],
+                           siteCovs=siteCovsNight, obsCovs=NULL)
+
+# Fit different models 
+
+#all data 
+all_null <- pcount(~1 ~1, data = sub, mixture=distribution) 
+all_null; summary(all_null)
+backTransform(all_null, type="state")	
+
+#day data 
+day_null <- pcount(~1 ~1, data = day, mixture=distribution)
+day_null; summary(day_null)
+backTransform(day_null, type="state")	
+
+#wood data 
+all_wood <- pcount(~1 ~1, data = sub.wood, mixture=distribution)
+
+#plain data 
+all_plains <- pcount(~1 ~1, data = sub.plain, mixture=distribution)
+
+#night data
+night_null <- pcount(~1 ~1, data = night, mixture=distribution)
+
+#create dataframe to predict 
+HabData <- data.frame(habitat = as.factor(c("woodlands", "plains")))
+
+#all habitat 
+all_hab <- pcount(~1 ~habitat, data=sub, mixture=distribution)
+all_hab; summary(all_hab)
+print("parameter estimate"); exp(coef(habitat, type="state"))
+lc.all.0 <- linearComb(all_hab, c(1,0), type="state") 
+backTransform(lc.all.0) #abundance on original scale 
+lc.all.1 <- linearComb(all_hab, c(1,1), type="state") 
+backTransform(lc.all.1) #abundance on original scale
+(HabAll <- predict(all_hab, newdata=HabData, type="state"))
+
+# Bootstrap models 
+B=1000
+
+new_all <- nonparboot(all_null, B=B)  
+backTransform(new_all, type = "state")
+SE(backTransform(new_all,type="state"),method="nonparboot")
+x <- NULL
+for(i in 1:B){
+  x <- c(x, as.numeric(new_all@bootstrapSamples[[i]][1]@estimates))
+}
+sd(exp(x)); mean(exp(x))
+
+new_day <- nonparboot(day_null, B=B) 
+backTransform(new_day, type = "state")
+SE(backTransform(new_day,type="state"),method="nonparboot")
+x <- NULL
+for(i in 1:B){
+  x <- c(x, as.numeric(new_day@bootstrapSamples[[i]][1]@estimates))
+}
+sd(exp(x)); mean(exp(x))
+
+new_night <- nonparboot(night_null, B=B) 
+backTransform(new_night, type = "state"); SE(backTransform(new_night,type="state"),method="nonparboot")
+x <- NULL
+for(i in 1:B){
+  x <- c(x, as.numeric(new_night@bootstrapSamples[[i]][1]@estimates))
+}
+sd(exp(x)); mean(exp(x))
+
+new_wood <- nonparboot(all_wood, B=B) 
+backTransform(new_day, type = "state")
+SE(backTransform(new_day,type="state"),method="nonparboot")
+x <- NULL
+for(i in 1:B){
+  x <- c(x, as.numeric(new_wood@bootstrapSamples[[i]][1]@estimates))
+}
+sd(exp(x)); mean(exp(x))
+
+new_plains <- nonparboot(all_plains, B=B) 
+backTransform(new_day, type = "state")
+SE(backTransform(new_day,type="state"),method="nonparboot")
+x <- NULL
+for(i in 1:B){
+  x <- c(x, as.numeric(new_plains@bootstrapSamples[[i]][1]@estimates))
+}
+sd(exp(x)); mean(exp(x))
+
+new_all_hab <- nonparboot(all_hab, B=B)
+backTransform(linearComb(new_all_hab, c(1,0), type="state"))
+backTransform(linearComb(new_all_hab, c(1,1), type="state"))
+SE(new_all_hab, method = "nonparboot")
+(NewHabAll <- predict(new_all_hab, newdata=HabData, type="state"))
