@@ -1,0 +1,139 @@
+## REM with Grumeti Data ## 
+
+# set workspace 
+library(RandEM); library(Hmisc)
+
+# load data 
+dat <- read.csv("grumeti_prepped.csv")
+effort <- read.csv("grumeti_effort.csv")
+traits <- read.csv("../Species_Traits.csv")
+grumeti <- read.csv("grumeti_counts.csv")
+
+# function using RandEM package 
+remcalc <- function(data, effort, traits, species, period){  #period = "ALL" or "SOME"
+  newdat <- NULL
+  sub <- data[data$species == species,]
+  sites <- NULL; sites$site <- unique(sub$site) 
+  sites$NUM <- c(1:length(sites$site))
+  sub <- merge(sub, sites, all.x=T)
+  sub <- sub[c("NUM", "count")]
+  sub$detdist <- 14.42 #sensor distance (m)
+  sub$theta <- 0.87475902 #camera angle (radians) 
+  
+  # define tm (total number of hours all cameras were operational) and v (distance travelled by focal species in 24 hours in km) 
+  tm <- ifelse(period=="ALL", nrow(effort)*24, nrow(effort)*12)
+  v <- traits[traits$Common.name == capitalize(species),]$Daily.Movement..km.
+  
+  # rem function 
+  nboots <- 10000
+  remsD <- boot_sd(sub, nboots=nboots, tm=tm, v=v)
+  remsSD <- sd(remsD)
+  remsSE <- sd(remsD)/sqrt(nboots)
+  
+  #output
+  newdat$species <- species
+  newdat$boot.mean <- mean(remsD)
+  newdat$boot.sd <- remsSD
+  newdat$boot.se <- remsSE
+  newdat$boot.upperCI <- mean(remsD) + 1.96*remsSE
+  newdat$boot.lowerCI <- mean(remsD) - 1.96*remsSE
+  
+  newdat <- data.frame(newdat)
+  return(newdat)
+}
+
+# species of interest 
+species <- c("buffalo", "eland", "elephant", "giraffe", "impala", "warthog", "waterbuck")
+
+## calculating REM 
+finaldat <- NULL
+for(i in 1:length(species)){
+  a <- remcalc(dat, effort, traits, species[i], "ALL")
+  a$subset <- "all"
+  
+  b <- remcalc(dat[dat$period == "day",], effort, traits, species[i], "SOME")
+  b$subset <- "day"
+  
+  c <- remcalc(dat[dat$period == "night",], effort, traits, species[i], "SOME")
+  c$subset <- "night"
+  
+  d <- remcalc(dat[dat$habitat == "woodlands",], effort, traits, species[i], "ALL")
+  d$subset <- "woods"
+  
+  e <- remcalc(dat[dat$habitat == "plains",], effort, traits, species[i], "ALL")
+  e$subset <- "plains"
+  
+  finaldat <- rbind(finaldat, a, b, c, d, e)
+}
+
+habdat <- read.csv("Output_REM/grumeti_rem_habitat.csv")
+finaldat <- rbind(finaldat, habdat)
+finaldat <- finaldat[order(finaldat$species),]
+
+# compare with Grumeti
+finaldat <- merge(finaldat, grumeti, all.x=T)
+finaldat$counts <- NULL; finaldat$lowerCI <- NULL; finaldat$upperCI <- NULL
+finaldat$per.err <- ((finaldat$boot.mean-finaldat$density)/finaldat$density)*100
+finaldat$CoV <- finaldat$boot.sd/finaldat$boot.mean
+
+write.csv(finaldat, "Output_REM/grumeti_rem_estimates_NEW.csv", row.names=F)
+
+
+## reliability 
+finaldat <- read.csv("Output_REM/grumeti_rem_estimates_NEW.csv")
+subset <- unique(finaldat$subset)
+reldf <- NULL
+
+for(i in 1:length(subset)) { 
+  x <- summary(lm(log(finaldat[finaldat$subset==subset[i],]$boot.mean) ~ log(finaldat[finaldat$subset==subset[i],]$density)))
+  reldf$subset[i] <- as.character(subset[i])
+  reldf$slope[i] <- x$coefficients[2,1]
+  reldf$stderr[i] <- x$coefficients[2,2]
+  reldf$up.ci[i] <- x$coefficients[2,1] + 1.96*x$coefficients[2,2]
+  reldf$lw.ci[i] <- x$coefficients[2,1] - 1.96*x$coefficients[2,2]
+  reldf$pval[i] <- x$coefficients[2,4]
+}
+reldf <- data.frame(reldf)
+
+write.csv(reldf, "Output_REM/grumeti_rem_loglog.csv", row.names=F)
+
+
+## model relationship between percent error and species traits 
+rm(list=ls())
+setwd("~/Desktop/CTValidation/Data/Grumeti")
+traits <- read.csv("../Species_Traits.csv")
+finaldat <- read.csv("Output_REM/grumeti_rem_estimates_NEW.csv")
+traits <- traits[c(1,3:6)]
+names(traits)[1] <- "species"
+traits$weight <- scale(traits$Weight..kg.)
+traits$group <- scale(traits$Group.Size)
+traits$move <- scale(traits$Daily.Movement..km.)
+traits$home <- scale(traits$Home.Range.Size..km2.)
+finaldat$species <- capitalize(as.character(finaldat$species))
+finaldat <- merge(finaldat, traits, all.x=T)
+finaldat$per.err <- abs(finaldat$per.err)
+
+subset <- unique(finaldat$subset)
+traitdf <- NULL
+
+for(i in 1:length(subset)) { 
+  x <- summary(lm(per.err ~ weight + group + move + home, dat = finaldat[finaldat$subset==subset[i],]))
+  newdf <- NULL
+  newdf$subset <- rep(as.character(subset[i]), 4)
+  newdf$trait <- c("Weight", "Group Size", "Daily Movement", "Home Range Size")
+  newdf$beta <- c(x$coefficients[2,1], x$coefficients[3,1], x$coefficients[4,1], x$coefficients[5,1]) 
+  newdf$stderr <- c(x$coefficients[2,2], x$coefficients[3,2], x$coefficients[4,2], x$coefficients[5,2])
+  newdf$uCI <- c(x$coefficients[2,1] + 1.96*x$coefficients[2,2], 
+                 x$coefficients[3,1] + 1.96*x$coefficients[3,2], 
+                 x$coefficients[4,1] + 1.96*x$coefficients[4,2], 
+                 x$coefficients[5,1] + 1.96*x$coefficients[5,2])
+  newdf$lCI <- c(x$coefficients[2,1] - 1.96*x$coefficients[2,2], 
+                 x$coefficients[3,1] - 1.96*x$coefficients[3,2], 
+                 x$coefficients[4,1] - 1.96*x$coefficients[4,2], 
+                 x$coefficients[5,1] - 1.96*x$coefficients[5,2])
+  newdf$pval <- c(x$coefficients[2,4], x$coefficients[3,4], x$coefficients[4,4], x$coefficients[5,4])
+  newdf <- data.frame(newdf)
+  traitdf <- rbind(traitdf, newdf)
+}
+traitdf
+write.csv(traitdf, "Output_REM/grumeti_rem_traitlm.csv", row.names=F)
