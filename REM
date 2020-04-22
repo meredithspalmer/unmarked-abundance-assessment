@@ -76,9 +76,10 @@ remcalc_hab <- function(data, effort, traits, species, period){  #period = "ALL"
   
   #output
   newdat$species <- species
-  newdat$boot.mean.perc <- mean(rem.boot$t)
-  newdat$boot.uCI.perc <- rem.ci$percent[5]
-  newdat$boot.lCI.perc <- rem.ci$percent[4]
+  newdat$boot.mean <- mean(rem.boot$t)
+  newdat$boot.uCI <- rem.ci$percent[5]
+  newdat$boot.lCI <- rem.ci$percent[4]
+  newdat$boot.sd <- sd(rem.boot$t)
   
   newdat <- data.frame(newdat)
   return(newdat)
@@ -127,14 +128,10 @@ remcalc_all <- function(data, effort, traits, species, period){  #period = "ALL"
   
   #output
   newdat$species <- species
-  newdat$boot.mean.orig <- mean(remsD)
-  newdat$boot.sd.orig <- remsSD
-  newdat$boot.se.orig <- remsSE
-  newdat$boot.uCI.SD <- mean(remsD) + 1.96*remsSD #as per reviewer #1, so with +/- 2*bootstrapSD instead of SE
-  newdat$boot.lCI.SD <- mean(remsD) - 1.96*remsSD #as per reviewer #1, so with +/- 2*bootstrapSD instead of SE
-  newdat$boot.mean.perc <- mean(rem.boot$t)
-  newdat$boot.uCI.perc <- rem.ci$percent[5]
-  newdat$boot.lCI.perc <- rem.ci$percent[4]
+  newdat$boot.mean <- mean(rem.boot$t)
+  newdat$boot.uCI <- rem.ci$percent[5]
+  newdat$boot.lCI <- rem.ci$percent[4]
+  newdat$boot.sd <- sd(rem.boot$t)
   
   newdat <- data.frame(newdat)
   return(newdat)
@@ -199,7 +196,6 @@ for(i in 1:length(subset)) {
 reldf <- data.frame(reldf)
 
 # model relationship between percent error and species traits 
-traits <- read.csv("../Species_Traits.csv")
 traits <- traits[c(1,3:6)]
 names(traits)[1] <- "species"
 traits$weight <- scale(traits$Weight..kg.)
