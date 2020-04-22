@@ -1,5 +1,7 @@
 ## Random Encounter Models (REMs) with Grumeti Data ## 
 
+## prepare ## 
+
 # set workspace 
 rm(list=ls())
 library(RandEM); library(Hmisc)
@@ -10,109 +12,153 @@ effort <- read.csv("grumeti_effort.csv")
 traits <- read.csv("Species_Traits.csv")
 grumeti <- read.csv("grumeti_counts.csv")
 
-# rem function using RandEM package 
-remcalc <- function(data, effort, traits, species, period){  #period = "ALL" or "SOME"
+# species of interest 
+species <- c("buffalo", "eland", "elephant", "giraffe", "impala", "warthog", "waterbuck")
+
+## functions ## 
+
+# rem weighted habitat function 
+rem_hab <- function(d, indices, tm_wood, tm_plains, v,woodsites, plainsites){
+  dat <- d[indices,]
+  dat_wood <- dat[dat$habitat == "woodlands",]; dat_plains <- dat[dat$habitat == "plains",]
+  dat_wood$habitat <- NULL; dat_plains$habitat <- NULL
+  
+  # Calculate y: total captures
+  y_wood <- sum(dat_wood[,2])
+  y_plains <- sum(dat_plains[,2])
+  
+  # Concert tm to days 
+  tm_wood_days <- tm_wood/24
+  tm_plains_days <- tm_plains/24
+  
+  # Convert r to kilometres (same for both sites)
+  r_kilometers <- mean(dat_wood[,3], na.rm = TRUE) / 1000
+  
+  # Take mean of angles (same for both sites) 
+  theta <- mean(dat_wood[,4], na.rm = TRUE)
+  
+  # Calculate REMs for each habitat and weight overall REM  
+  trm1_wood <- y_wood / tm_wood_days
+  trm1_plain <- y_plains / tm_plains_days
+  trm2 <- pi / (v * r_kilometers * (2 + theta))
+  
+  REM_wood <- trm1_wood * trm2; REM_plains <- trm1_plain * trm2
+  REM_total <- (REM_wood/length(woodsites)) + (REM_plains/length(plainsites))
+  
+  # Return overall REM 
+  return(REM_total)
+}
+
+# rem weighted habitat bootstrapping using RandEM package 
+remcalc_hab <- function(data, effort, traits, species, period){  #period = "ALL" or "SOME"
+  newdat <- NULL
+  woodsites <- unique(data[data$habitat == "woodlands",]$site) #OVERALL sites, not just where animal spotted 
+  plainsites <- unique(data[data$habitat == "plains",]$site) #OVERALL sites, not just where animal spotted 
+  sub <- data[data$species == species,]
+  sites <- NULL; sites$site <- unique(sub$site) 
+  sites$NUM <- c(1:length(sites$site))
+  sub <- merge(sub, sites, all.x=T)
+  sub <- sub[c("NUM", "count", "habitat")]
+  sub$detdist <- 13.72 #CUDDEBACK sensor distance in m ##14.42 #sensor distance (m)
+  sub$theta <- 0.49 #CUDDEBACK sensor distance in radians ##0.87475902 #camera angle (radians) 
+  v <- traits[traits$Common.name == capitalize(species),]$Daily.Movement..km.
+  
+  effort_wood <- effort[effort$site %in% woodsites,]
+  tm_wood <- ifelse(period=="ALL", nrow(effort_wood)*24, nrow(effort_wood)*12)
+  effort_plains <- effort[effort$site %in% plainsites,]
+  tm_plains <- ifelse(period=="ALL", nrow(effort_plains)*24, nrow(effort_plains)*12)
+  
+  nboots <- 10000
+  rem.boot <- boot(sub, 
+                   tm_wood=tm_wood, tm_plains=tm_plains, v=v, woodsites=woodsites, plainsites=plainsites,
+                   R = nboots, statistic = rem_hab)
+  rem.ci <- boot.ci(rem.boot, conf=0.95, type="perc")
+  
+  #output
+  newdat$species <- species
+  newdat$boot.mean.perc <- mean(rem.boot$t)
+  newdat$boot.uCI.perc <- rem.ci$percent[5]
+  newdat$boot.lCI.perc <- rem.ci$percent[4]
+  
+  newdat <- data.frame(newdat)
+  return(newdat)
+}
+
+# rem function (w/o habitat)
+rem2 <- function(d, indices, tm, v){
+  dat <- d[indices,]
+    
+  # Calculate y: total captures
+  y <- sum(dat[,2])
+    
+  # Convert to detection distance to kilometres and effort to days
+  tm_days <- tm / 24
+  r_kilometers <- mean(dat[,3], na.rm = TRUE) / 1000
+    
+  # Take mean of angles
+  theta <- mean(dat[,4], na.rm = TRUE)
+    
+  # Calculate the first half of the equation
+  trm1 <- y / tm_days
+  trm2 <- pi / (v * r_kilometers * (2 + theta))
+    
+  # Calculate REM
+  return(trm1 * trm2)
+}
+
+# rem w/o habitat bootstrapping using RandEM package 
+remcalc_all <- function(data, effort, traits, species, period){  #period = "ALL" or "SOME"
   newdat <- NULL
   sub <- data[data$species == species,]
   sites <- NULL; sites$site <- unique(sub$site) 
   sites$NUM <- c(1:length(sites$site))
   sub <- merge(sub, sites, all.x=T)
   sub <- sub[c("NUM", "count")]
-  sub$detdist <- 13.72 #camera sensor distance in m 
-  sub$theta <- 0.49 #camera sensor distance in radians 
+  sub$detdist <- 13.72 #sensor distance in m ##14.42 #sensor distance (m)
+  sub$theta <- 0.49 #sensor distance in radians 
   
-  # define tm (total number of hours all cameras were operational) and v (distance travelled by focal species in 24 hours in km) 
+  # tm (total hrs all cameras were operational) and v (distance travelled by focal species in 24 hours in km) 
   tm <- ifelse(period=="ALL", nrow(effort)*24, nrow(effort)*12)
   v <- traits[traits$Common.name == capitalize(species),]$Daily.Movement..km.
   
-  # rem function 
-  nboots <- 10000 #number of bootstraps 
-  remsD <- boot_sd(sub, nboots=nboots, tm=tm, v=v)
-  remsSD <- sd(remsD)
-  remsSE <- sd(remsD)/sqrt(nboots)
+  nboots <- 10000
+  rem.boot <- boot(sub, tm = tm, v = v, R = nboots, statistic = rem2)
+  rem.ci <- boot.ci(rem.boot, conf=0.95, type="perc")
   
   #output
   newdat$species <- species
-  newdat$boot.mean <- mean(remsD)
-  newdat$boot.sd <- remsSD
-  newdat$boot.se <- remsSE
-  newdat$boot.upperCI <- mean(remsD) + 1.96*remsSE
-  newdat$boot.lowerCI <- mean(remsD) - 1.96*remsSE
+  newdat$boot.mean.orig <- mean(remsD)
+  newdat$boot.sd.orig <- remsSD
+  newdat$boot.se.orig <- remsSE
+  newdat$boot.uCI.SD <- mean(remsD) + 1.96*remsSD #as per reviewer #1, so with +/- 2*bootstrapSD instead of SE
+  newdat$boot.lCI.SD <- mean(remsD) - 1.96*remsSD #as per reviewer #1, so with +/- 2*bootstrapSD instead of SE
+  newdat$boot.mean.perc <- mean(rem.boot$t)
+  newdat$boot.uCI.perc <- rem.ci$percent[5]
+  newdat$boot.lCI.perc <- rem.ci$percent[4]
   
   newdat <- data.frame(newdat)
   return(newdat)
 }
 
-# rem function for weighted habitat data 
-bsD.hab <- function(dat, effort, v, period){
-  wooddat <- dat[dat$habitat == "woodlands",]
-  wooddat$habitat <- NULL 
-  woodsites <- length(unique(wooddat$site))
-  woodeffort <- effort[effort$site %in% unique(wooddat$site),]
-  tm <- ifelse(period=="ALL", nrow(woodeffort)*24, nrow(woodeffort)*12)
-  wooddat$site <- NULL 
-  wooddat$detdist <- 13.72 #camera sensor distance in m 
-  wooddat$theta <- 0.49 #camera sensor distance in radians
+## bootstrapping ## 
+
+# calculating weighted habitat REM 
+finaldat <- NULL
+for(i in 1:length(species)){
+  a <- remcalc_hab(dat, effort, traits, species[i], "ALL")
+  a$subset <- "all_wHab"
   
-  bsDatWood <- wooddat[sample(1:nrow(wooddat), size = nrow(wooddat), replace = TRUE),]
-  dOutWood <- rem(bsDatWood, tm, v) 
+  b <- remcalc_hab(dat[dat$period == "day",], effort, traits, species[i], "SOME")
+  b$subset <- "day_wHab"
   
-  plaindat <- dat[dat$habitat == "plains",]
-  plaindat$habitat <- NULL
-  plainsites <- length(unique(plaindat$site))
-  plaineffort <- effort[effort$site %in% unique(plaindat$site),]
-  tm <- ifelse(period=="ALL", nrow(plaineffort)*24, nrow(plaineffort)*12)
+  c <- remcalc_hab(dat[dat$period == "night",], effort, traits, species[i], "SOME")
+  c$subset <- "night_wHab"
   
-  plaindat$site <- NULL 
-  plaindat$detdist <- 13.72 #camera sensor distance in m 
-  plaindat$theta <- 0.49 #camera sensor distance in radians 
-  
-  bsDatPlain <- plaindat[sample(1:nrow(plaindat), size = nrow(plaindat), replace = TRUE),]
-  dOutPlain <- rem(bsDatPlain, tm, v)
-  
-  dOut <- (dOutWood*woodsites*5 + dOutPlain*plainsites*5)/((woodsites+plainsites) * 5)
-  return(dOut)
+  finaldat <- rbind(finaldat, a, b, c)
 }
+habdat <- finaldat; rm(finaldat) 
 
-# bootstrapping function for habitat data 
-boot_sd.hab <- function (x, effort, v, nboots, period) {
-  d <- replicate(nboots, bsD.hab(x, effort, v, period))
-  return(d)
-}
-
-# overall function for habitat data 
-remcalc.hab <- function(data, effort, traits, species, period){ 
-  newdat <- NULL
-  sub <- data[data$species == species,]
-  sites <- NULL; sites$site <- unique(sub$site) 
-  sites$NUM <- c(1:length(sites$site))
-  sub <- merge(sub, sites, all.x=T)
-  sub <- sub[c("NUM", "count", "habitat", "site")]
-  v <- traits[traits$Common.name == capitalize(species),]$Daily.Movement..km.
-  
-  # rem function 
-  nboots <- 10000 #number of bootstraps
-  remsD <- boot_sd.hab(sub, nboots=nboots, effort=effort, v=v, period=period) 
-  remsSD <- sd(remsD)
-  remsSE <- sd(remsD)/sqrt(nboots)
-  
-  #output
-  newdat$species <- species
-  newdat$boot.mean <- mean(remsD)
-  newdat$boot.sd <- remsSD
-  newdat$boot.se <- remsSE
-  newdat$boot.upperCI <- mean(remsD) + 1.96*remsSE
-  newdat$boot.lowerCI <- mean(remsD) - 1.96*remsSE
-  
-  newdat <- data.frame(newdat)
-  return(newdat)
-} 
-
-
-## species of interest 
-species <- c("buffalo", "eland", "elephant", "giraffe", "impala", "warthog", "waterbuck")
-
-## calculating REM 
+# calculating REM w/o habitat 
 finaldat <- NULL
 for(i in 1:length(species)){
   a <- remcalc(dat, effort, traits, species[i], "ALL")
@@ -124,38 +170,20 @@ for(i in 1:length(species)){
   c <- remcalc(dat[dat$period == "night",], effort, traits, species[i], "SOME")
   c$subset <- "night"
   
-  d <- remcalc(dat[dat$habitat == "woodlands",], effort, traits, species[i], "ALL")
-  d$subset <- "woods"
-  
-  e <- remcalc(dat[dat$habitat == "plains",], effort, traits, species[i], "ALL")
-  e$subset <- "plains"
-  
-  finaldat <- rbind(finaldat, a, b, c, d, e)
+  finaldat <- rbind(finaldat, a, b, c)
 }
 
-# calculating REM for habitat data 
-habdat <- NULL
-for(i in 1:length(species)){
-  a <- remcalc.hab(dat, effort, traits, species[i], "ALL")
-  a$subset <- "habitat/all"
-  
-  b <-  remcalc.hab(dat, effort, traits, species[i], "SOME") #NOTE: never end up using this 
-  b$subset <- "habitat/day"
-  
-  habdat <- rbind(habdat, a, b)
-}
-
-# combine data 
 finaldat <- rbind(finaldat, habdat)
 finaldat <- finaldat[order(finaldat$species),]
 
-# compare with Grumeti aerial counts 
+## analyses and comparisons ## 
+
+# compare with Grumeti
 finaldat <- merge(finaldat, grumeti, all.x=T)
 finaldat$per.err <- ((finaldat$boot.mean-finaldat$density)/finaldat$density)*100
 finaldat$CoV <- finaldat$boot.sd/finaldat$boot.mean
 
-
-## reliability 
+# reliability 
 subset <- unique(finaldat$subset)
 reldf <- NULL
 
@@ -170,7 +198,8 @@ for(i in 1:length(subset)) {
 }
 reldf <- data.frame(reldf)
 
-## model relationship between percent error and species traits 
+# model relationship between percent error and species traits 
+traits <- read.csv("../Species_Traits.csv")
 traits <- traits[c(1,3:6)]
 names(traits)[1] <- "species"
 traits$weight <- scale(traits$Weight..kg.)
