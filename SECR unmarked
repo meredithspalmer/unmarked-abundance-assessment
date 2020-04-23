@@ -1,12 +1,29 @@
-## SECR unmarked extension for Grumeti Data ## 
+###############
+# SECR MODELS #
+###############
 
 ## set workspace 
-library(plyr); library(lubridate); library(dplyr); library(ggplot2); library(reshape); library(tidyr); library(Hmisc)
+rm(list=ls())
+library(plyr); library(lubridate); library(dplyr); library(ggplot2); library(reshape); library(tidyr); library(Hmisc); library(boot) 
 
+# select animals
+species <- "buffalo"
+nboots <- 10000
 
-## define functions (FROM Chandler & Royle 2013 SUPPLEMENTAL MATERIAL): 
+# load data
+dat <- read.csv("grumeti_prepped.csv")
+effort <- read.csv("grumeti_effort.csv")
+names(effort)[1] <- "date"
+grumeti <- read.csv("grumeti_counts.csv")
+traits <- read.csv("../Species_Traits.csv")
 
-# distance between sample locations and activity centers
+locsutm <- read.csv("GrumetiCamsUTM.csv")
+names(locsutm)[1:2] <- c("easting", "northing")
+hab <- read.csv("grumeti_habitat.csv")
+
+## define functions
+
+# Chandler & Royle 2013: distance between sample locations and activity centers
 e2dist1 <- function (x, y)
 {
   i <- sort(rep(1:nrow(y), nrow(x)))
@@ -14,7 +31,7 @@ e2dist1 <- function (x, y)
   matrix(dvec, nrow = nrow(x), ncol = nrow(y), byrow = F)
 }
 
-# draw posterior samples using MCMC (this version does not update z)
+# Chandler & Royle 2013: draw posterior samples using MCMC (this version does not update z)
 spNmix <- function(n, X, M, niters, xlims, ylims, tune=c(0.1, 0.1, 2),
                    monitorS=FALSE)
 {
@@ -134,122 +151,326 @@ spNmix <- function(n, X, M, niters, xlims, ylims, tune=c(0.1, 0.1, 2),
   list(out=out, last=last, Sout=Sout)
 }
 
-
-## load/prep data: 
-
-# select animals
-species <- "eland"
-
-# load data
-dat <- read.csv("grumeti_prepped.csv") #camera trap data 
-effort <- read.csv("grumeti_effort.csv") #on-off dates for each camera 
-names(effort)[1] <- "date"
-grumeti <- read.csv("grumeti_counts.csv") #aerial estimates 
-traits <- read.csv("../Species_Traits.csv") #traits of focal species 
-
-locsutm <- read.csv("GrumetiCamsUTM.csv") #camera trap coordinates 
-names(locsutm)[1:2] <- c("easting", "northing")
-hab <- read.csv("grumeti_habitat.csv") #habitat data 
-
-# format data 
-subdat <- dat[dat$species == species,]
-datsum <- ddply(subdat, .(date, site, species), summarise, totcount = sum(count))
-datsum.period <- ddply(subdat, .(date, site, species, period), summarise, totcount = sum(count))
-
-datsum <- merge(effort, datsum, all.x=T )
-datsum$species <- species
-datsum <- merge(datsum, hab, all.x=T) 
-datsum <- merge(datsum, locsutm, all.x=T)
-datsum[is.na(datsum)] <- 0
-
-datsum.day <- merge(effort, datsum.period[datsum.period$period == "day",], all.x=T)
-datsum.day$species <- species; datsum.day$period <- "day"
-datsum.day <- merge(datsum.day, hab, all.x=T)
-datsum.day <- merge(datsum.day, locsutm, all.x=T)
-datsum.day[is.na(datsum.day)] <- 0
-
-datsum.night <- merge(effort, datsum.period[datsum.period$period == "night",], all.x=T)
-datsum.night$species <- species; datsum.night$period <- "night"
-datsum.night <- merge(datsum.night, hab, all.x=T)
-datsum.night <- merge(datsum.night, locsutm, all.x=T)
-datsum.night[is.na(datsum.night)] <- 0
+# secr functions 
+secr.all <- function(d, indices, species, effort, hab, locstum, grumeti){
+  # prep data
+  d <- d[d$species == species,]
+  data <- d[indices,]
+  datsum <- ddply(data, .(date, site, species), summarise, totcount = sum(count)) 
+  datsum <- merge(effort, datsum, all.x=T )
+  datsum$species <- species
+  datsum <- merge(datsum, hab, all.x=T) 
+  datsum <- merge(datsum, locsutm, all.x=T)
+  datsum <- datsum[!is.na(datsum$easting),] #no coords for J32?? 
+  datsum[is.na(datsum)] <- 0
   
-# consolidate into weeks 
-datsum$week <- week(datsum$date)
-datsum.day$week <- week(datsum.day$date)
-datsum.night$week <- week(datsum.night$date)
+  # consolidate into weeks 
+  datsum$week <- week(datsum$date)
+  
+  # summarize counts by week for each subset
+  week.all <- ddply(datsum, .(site, easting, northing, week), summarise, count=sum(totcount))
+  
+  # set sequences 
+  mindate <- min(datsum$week); maxdate <- max(datsum$week)
+  alldates <- seq(mindate, maxdate)
+  alldates <- as.data.frame(alldates); names(alldates)[1] <- "week"
+  sites.all <- unique(week.all$site)
+  
+  # make matrix of counts 
+  week.all <- week.all[order(week.all$site, week.all$week),]
+  week.all <- spread(week.all, key=week, value=count)
+  n.all <- week.all[,c(4:length(week.all))]; n.all <- as.matrix(n.all)
+  
+  # make matrix of locations 
+  X.all <- week.all[,c(2:3)]; X.all <- as.matrix(X.all)
+  
+  # set x and y lims 
+  # - based on home range estimates, to capture animals if territory near perimeter
+  halfhome <- 0.5 * traits[traits$Common.name == capitalize(species),]$Home.Range.Size..km2.
+  
+  xlims <- c((min(week.all$easting) - halfhome), (max(week.all$easting) + halfhome))
+  ylims <- c((min(week.all$northing) - halfhome), (max(week.all$northing) + halfhome))
+  
+  # set M
+  sppdat <- grumeti[grumeti$species == species,]
+  M <- sppdat$counts * 2
+  niters <- 10000 
+  nboots <- 10000 
+  
+  m1 <- spNmix(n = n.all, X = X.all, M=M, niters=niters, xlims=xlims, ylims=ylims)
+  x <- mean(m1$out[,4]) #mean
+  
+  return(x)
+}
+  
+secr.day <- function(d, indices, species, effort, hab, locstum, grumeti){
+  # prep data
+  d <- d[d$species == species,]
+  data <- d[indices,]
+  datsum.period <- ddply(data, .(date, site, species, period), summarise, totcount = sum(count))
+  
+  datsum.day <- merge(effort, datsum.period[datsum.period$period == "day",], all.x=T)
+  datsum.day$species <- species; datsum.day$period <- "day"
+  datsum.day <- merge(datsum.day, hab, all.x=T)
+  datsum.day <- merge(datsum.day, locsutm, all.x=T)
+  datsum.day <- datsum.day[!is.na(datsum.day$easting),] #no coords for J32?? 
+  datsum.day[is.na(datsum.day)] <- 0
+  
+  # consolidate into weeks 
+  datsum.day$week <- week(datsum.day$date)
+  
+  # summarize counts by week for each subset
+  week.day <- ddply(datsum.day, .(site, easting, northing, week, period), summarise, count=sum(totcount))
+  
+  # set sequences 
+  mindate <- min(datsum.day$week); maxdate <- max(datsum.day$week)
+  alldates <- seq(mindate, maxdate)
+  alldates <- as.data.frame(alldates); names(alldates)[1] <- "week"
+  sites.all <- unique(week.day$site)
+  
+  # make matrix of counts 
+  week.day <- week.day[order(week.day$site, week.day$week),]
+  week.day <- spread(week.day, key=week, value=count)
+  n.day <- week.day[,c(5:length(week.day))]; n.day <- as.matrix(n.day)
+  
+  # make matrix of locations 
+  X.day <- week.day[,c(2:3)]; X.day <- as.matrix(X.day)
+  
+  # set x and y lims 
+  # - based on home range estimates, to capture animals if territory near perimeter
+  halfhome <- 0.5 * traits[traits$Common.name == capitalize(species),]$Home.Range.Size..km2.
+  
+  xlims <- c((min(week.day$easting) - halfhome), (max(week.day$easting) + halfhome))
+  ylims <- c((min(week.day$northing) - halfhome), (max(week.day$northing) + halfhome))
+  
+  # set M
+  sppdat <- grumeti[grumeti$species == species,]
+  M <- sppdat$counts * 2
+  niters <- 10000 
+  nboots <- 10000 
+  
+  m4 <- spNmix(n = n.day, X = X.day, M=M, niters=niters, xlims=xlims, ylims=ylims) 
+  x <- mean(m4$out[,4]) #mean
+  return(x)
+}
 
-# summarize counts by week for each subset
-week.all <- ddply(datsum, .(site, easting, northing, week), summarise, count=sum(totcount))
-week.wood <- ddply(datsum[datsum$habitat == "woodlands",], .(site, easting, northing, week, habitat), summarise, count=sum(totcount))
-week.plain <- ddply(datsum[datsum$habitat == "plains",], .(site, easting, northing, week, habitat), summarise, count=sum(totcount))
-week.day <- ddply(datsum.day, .(site, easting, northing, week, period), summarise, count=sum(totcount))
-week.night <- ddply(datsum.night, .(site, easting, northing, week, period), summarise, count=sum(totcount))
+secr.night <- function(d, indices, species, effort, hab, locstum, grumeti){
+  # prep data
+  d <- d[d$species == species,]
+  data <- d[indices,]
+  datsum.period <- ddply(data, .(date, site, species, period), summarise, totcount = sum(count))
+  
+  datsum.night <- merge(effort, datsum.period[datsum.period$period == "night",], all.x=T)
+  datsum.night$species <- species; datsum.night$period <- "night"
+  datsum.night <- merge(datsum.night, hab, all.x=T)
+  datsum.night <- merge(datsum.night, locsutm, all.x=T)
+  datsum.night <- datsum.night[!is.na(datsum.night$easting),] #no coords for J32?? 
+  datsum.night[is.na(datsum.night)] <- 0
+  
+  # consolidate into weeks 
+  datsum.night$week <- week(datsum.night$date)
+  
+  # summarize counts by week for each subset
+  week.night <- ddply(datsum.night, .(site, easting, northing, week, period), summarise, count=sum(totcount))
+  
+  # set sequences 
+  mindate <- min(datsum.night$week); maxdate <- max(datsum.night$week)
+  alldates <- seq(mindate, maxdate)
+  alldates <- as.data.frame(alldates); names(alldates)[1] <- "week"
+  
+  sites.all <- unique(week.night$site)
 
-# set sequences 
-mindate <- min(datsum$week); maxdate <- max(datsum$week)
-alldates <- seq(mindate, maxdate)
-alldates <- as.data.frame(alldates); names(alldates)[1] <- "week"
+  # make matrix of counts 
+  week.night <- week.night[order(week.night$site, week.night$week),]
+  week.night <- spread(week.night, key=week, value=count)
+  n.night <- week.night[,c(5:length(week.night))]; n.night <- as.matrix(n.night)
+  
+  # make matrix of locations 
+  X.night <- week.night[,c(2:3)]; X.night <- as.matrix(X.night)
+  
+  # set x and y lims 
+  # - based on home range estimates, to capture animals if territory near perimeter
+  halfhome <- 0.5 * traits[traits$Common.name == capitalize(species),]$Home.Range.Size..km2.
+  
+  xlims <- c((min(week.night$easting) - halfhome), (max(week.night$easting) + halfhome))
+  ylims <- c((min(week.night$northing) - halfhome), (max(week.night$northing) + halfhome))
 
-sites.all <- unique(week.all$site)
-sites.wood <- unique(week.wood$site)
-sites.plain <- unique(week.plain$site)
+  # set M
+  sppdat <- grumeti[grumeti$species == species,]
+  M <- sppdat$counts * 2
+  niters <- 10000 
+  nboots <- 10000 
+  
+  m5 <- spNmix(n = n.night, X = X.night, M=M, niters=10000, xlims=xlims, ylims=ylims)
+  x <- mean(m5$out[,4]) #mean
+  return(x)
+}
 
-# make matrix of counts 
-week.all <- week.all[order(week.all$site, week.all$week),]
-week.wood <- week.wood[order(week.wood$site, week.wood$week),]
-week.plain <- week.plain[order(week.plain$site, week.plain$week),]
-week.day <- week.day[order(week.day$site, week.day$week),]
-week.night <- week.night[order(week.night$site, week.night$week),]
+secr.plains <- function(d, indices, species, effort, hab, locstum, grumeti){
+  # prep data
+  d <- d[d$species == species,]
+  data <- d[indices,]
+  
+  datsum <- ddply(data, .(date, site, species), summarise, totcount = sum(count))
+  datsum <- merge(effort, datsum, all.x=T )
+  datsum$species <- species
+  datsum <- merge(datsum, hab, all.x=T) 
+  datsum <- merge(datsum, locsutm, all.x=T)
+  datsum <- datsum[!is.na(datsum$easting),] #no coords for J32?? 
+  datsum[is.na(datsum)] <- 0
+  
+  # consolidate into weeks 
+  datsum$week <- week(datsum$date)
+  
+  # summarize counts by week for each subset
+  week.plain <- ddply(datsum[datsum$habitat == "plains",], .(site, easting, northing, week, habitat), summarise, count=sum(totcount))
+  
+  # set sequences 
+  mindate <- min(datsum$week); maxdate <- max(datsum$week)
+  alldates <- seq(mindate, maxdate)
+  alldates <- as.data.frame(alldates); names(alldates)[1] <- "week"
+  sites.plain <- unique(week.plain$site)
+  
+  # make matrix of counts 
+  week.plain <- week.plain[order(week.plain$site, week.plain$week),]
+  week.plain <- spread(week.plain, key=week, value=count)
+  n.plain <- week.plain[,c(5:length(week.plain))]; n.plain <- as.matrix(n.plain)
+  
+  # make matrix of locations 
+  X.plain <- week.plain[,c(2:3)]; X.plain <- as.matrix(X.plain)
 
-week.all <- spread(week.all, key=week, value=count)
-week.wood <- spread(week.wood, key=week, value=count)
-week.plain <- spread(week.plain, key=week, value=count)
-week.day <- spread(week.day, key=week, value=count)
-week.night <- spread(week.night, key=week, value=count)
+  # set x and y lims 
+  # - based on home range estimates, to capture animals if territory near perimeter
+  halfhome <- 0.5 * traits[traits$Common.name == capitalize(species),]$Home.Range.Size..km2.
+  
+  xlims.plain <- c((min(week.plain$easting) - halfhome), (max(week.plain$easting) + halfhome))
+  ylims.plain <- c((min(week.plain$northing) - halfhome), (max(week.plain$northing) + halfhome))
+  
+  # set M
+  sppdat <- grumeti[grumeti$species == species,]
+  M <- sppdat$counts * 2
+  niters <- 10000 
+  nboots <- 10000 
+  
+  m3 <- spNmix(n = n.plain, X = X.plain, M=M, niters=niters, xlims=xlims.plain, ylims=ylims.plain)
+  x <- mean(m3$out[,4]) #mean
+  
+  return(x)
+}
 
-n.all <- week.all[,c(4:length(week.all))]; n.all <- as.matrix(n.all)
-n.wood <- week.wood[,c(5:length(week.wood))]; n.wood <- as.matrix(n.wood)
-n.plain <- week.plain[,c(5:length(week.plain))]; n.plain <- as.matrix(n.plain)
-n.day <- week.day[,c(5:length(week.day))]; n.day <- as.matrix(n.day)
-n.night <- week.night[,c(5:length(week.night))]; n.night <- as.matrix(n.night)
+secr.woods <- function(d, indices, species, effort, hab, locstum, grumeti){
+  # prep data
+  d <- d[d$species == species,]
+  data <- d[indices,]
+  
+  datsum <- ddply(data, .(date, site, species), summarise, totcount = sum(count))
+  datsum <- merge(effort, datsum, all.x=T )
+  datsum$species <- species
+  datsum <- merge(datsum, hab, all.x=T) 
+  datsum <- merge(datsum, locsutm, all.x=T)
+  datsum <- datsum[!is.na(datsum$easting),] #no coords for J32?? 
+  datsum[is.na(datsum)] <- 0
+  
+  # consolidate into weeks 
+  datsum$week <- week(datsum$date)
+  
+  # summarize counts by week for each subset
+  week.wood <- ddply(datsum[datsum$habitat == "woodlands",], .(site, easting, northing, week, habitat), summarise, count=sum(totcount))
+  
+  # set sequences 
+  mindate <- min(datsum$week); maxdate <- max(datsum$week)
+  alldates <- seq(mindate, maxdate)
+  alldates <- as.data.frame(alldates); names(alldates)[1] <- "week"
+  sites.wood <- unique(week.wood$site)
+  
+  # make matrix of counts 
+  week.wood <- week.wood[order(week.wood$site, week.wood$week),]
+  week.wood <- spread(week.wood, key=week, value=count)
+  n.wood <- week.wood[,c(5:length(week.wood))]; n.wood <- as.matrix(n.wood)
+  
+  # make matrix of locations 
+  X.wood <- week.wood[,c(2:3)]; X.wood <- as.matrix(X.wood)
+  
+  # set x and y lims 
+  # - based on home range estimates, to capture animals if territory near perimeter
+  halfhome <- 0.5 * traits[traits$Common.name == capitalize(species),]$Home.Range.Size..km2.
+  
+  xlims.wood <- c((min(week.wood$easting) - halfhome), (max(week.wood$easting) + halfhome))
+  ylims.wood <- c((min(week.wood$northing) - halfhome), (max(week.wood$northing) + halfhome)) 
+  
+  # set M
+  sppdat <- grumeti[grumeti$species == species,]
+  M <- sppdat$counts * 2
+  niters <- 10000 
+  nboots <- 10000 
+  
+  m2 <- spNmix(n = n.wood, X = X.wood, M=M, niters=niters, xlims=xlims.wood, ylims=ylims.wood)
+  x <- mean(m2$out[,4]) #mean
+  
+  return(x)
+}
 
-# make matrix of locations 
-X.all <- week.all[,c(2:3)]; X.all <- as.matrix(X.all)
-X.wood <- week.wood[,c(2:3)]; X.wood <- as.matrix(X.wood)
-X.plain <- week.plain[,c(2:3)]; X.plain <- as.matrix(X.plain)
-X.day <- week.day[,c(2:3)]; X.day <- as.matrix(X.day)
-X.night <- week.night[,c(2:3)]; X.night <- as.matrix(X.night)
+## bootstrap secr 
 
-# set x and y lims 
-# (based on home range estimates, to capture animals if territory near perimeter)
-halfhome <- 0.5 * traits[traits$Common.name == capitalize(species),]$Home.Range.Size..km2.
+newdf <- NULL
 
-xlims <- c((min(week.all$easting) - halfhome), (max(week.all$easting) + halfhome))
-ylims <- c((min(week.all$northing) - halfhome), (max(week.all$northing) + halfhome))
+secr.all.boot <- boot(d=dat, species=species, effort=effort, hab=hab, locstum=locstum, grumeti=grumeti,
+                      R = nboots, statistic = secr.all)
+secr.all.ci <- boot.ci(serc.all.boot, conf=0.95, type="perc")
+secr.all.sd <- sd(secr.all.boot$t)
 
-xlims.wood <- c((min(week.wood$easting) - halfhome), (max(week.wood$easting) + halfhome))
-ylims.wood <- c((min(week.wood$northing) - halfhome), (max(week.wood$northing) + halfhome)) 
+newdf$species[1] <- as.character(species)
+newdf$subset[1] <- "all"
+newdf$boot.mean.perc[1] <- mean(serc.all.boot$t)
+newdf$boot.uCI.perc[1] <- serc.all.ci$percent[5]
+newdf$boot.lCI.perc[1] <- serc.all.ci$percent[4]  
+newdf$boot.sd.perc[1] <- serc.all.sd
+newdf <- data.frame(newdf)
 
-xlims.plain <- c((min(week.plain$easting) - halfhome), (max(week.plain$easting) + halfhome))
-ylims.plain <- c((min(week.plain$northing) - halfhome), (max(week.plain$northing) + halfhome))
+secr.day.boot <- boot(d=dat, species=species, effort=effort, hab=hab, locstum=locstum, grumeti=grumeti,
+                      R = nboots, statistic = secr.day)
+secr.day.ci <- boot.ci(serc.day.boot, conf=0.95, type="perc")
+secr.day.sd <- sd(secr.day.boot$t)
 
-# set M
-sppdat <- grumeti[grumeti$species == species,]
-M <- sppdat$counts * 10 #10x indepedent estimate so to not affect SECR estimate 
+newdf$species[2] <- as.character(species)
+newdf$subset[2] <- "day"
+newdf$boot.mean.perc[2] <- mean(serc.day.boot$t)
+newdf$boot.uCI.perc[2] <- serc.day.ci$percent[5]
+newdf$boot.lCI.perc[2] <- serc.day.ci$percent[4]  
+newdf$boot.sd.perc[2] <- serc.day.sd
 
-# run models 
-m1 <- spNmix(n = n.all, X = X.all, M=M, niters=10000, xlims=xlims, ylims=ylims)
-summary(m1$out)
+secr.night.boot <- boot(d=dat, species=species, effort=effort, hab=hab, locstum=locstum, grumeti=grumeti,
+                      R = nboots, statistic = secr.night)
+secr.night.ci <- boot.ci(serc.night.boot, conf=0.95, type="perc")
+secr.night.sd <- sd(secr.night.boot$t)
 
-m2 <- spNmix(n = n.plain, X = X.plain, M=M, niters=10000, xlims=xlims.plain, ylims=ylims.plain)
-summary(m2$out)
+newdf$species[3] <- as.character(species)
+newdf$subset[3] <- "night"
+newdf$boot.mean.perc[3] <- mean(serc.night.boot$t)
+newdf$boot.uCI.perc[3] <- serc.night.ci$percent[5]
+newdf$boot.lCI.perc[3] <- serc.night.ci$percent[4]  
+newdf$boot.sd.perc[3] <- serc.night.sd
 
-m3 <- spNmix(n = n.wood, X = X.wood, M=M, niters=10000, xlims=xlims.wood, ylims=ylims.wood)
-summary(m3$out0)
+secr.plains.boot <- boot(d=dat, species=species, effort=effort, hab=hab, locstum=locstum, grumeti=grumeti,
+                        R = nboots, statistic = secr.plains)
+secr.plains.ci <- boot.ci(serc.plains.boot, conf=0.95, type="perc")
+secr.plains.sd <- sd(secr.plains.boot$t)
 
-m4 <- spNmix(n = n.day, X = X.day, M=M, niters=10000, xlims=xlims, ylims=ylims) 
-summary(m4$out)
+newdf$species[4] <- as.character(species)
+newdf$subset[4] <- "plains"
+newdf$boot.mean.perc[4] <- mean(serc.plains.boot$t)
+newdf$boot.uCI.perc[4] <- serc.plains.ci$percent[5]
+newdf$boot.lCI.perc[4] <- serc.plains.ci$percent[4]  
+newdf$boot.sd.perc[4] <- serc.plains.sd
 
-m5 <- spNmix(n = n.night, X = X.night, M=M, niters=10000, xlims=xlims, ylims=ylims)
-summary(m5$out)
+secr.woods.boot <- boot(d=dat, species=species, effort=effort, hab=hab, locstum=locstum, grumeti=grumeti,
+                         R = nboots, statistic = secr.woods)
+secr.woods.ci <- boot.ci(serc.woods.boot, conf=0.95, type="perc")
+secr.woods.sd <- sd(secr.woods.boot$t)
+
+newdf$species[4] <- as.character(species)
+newdf$subset[4] <- "woods"
+newdf$boot.mean.perc[5] <- mean(serc.woods.boot$t)
+newdf$boot.uCI.perc[5] <- serc.woods.ci$percent[5]
+newdf$boot.lCI.perc[5] <- serc.woods.ci$percent[4]  
+newdf$boot.sd.perc[5] <- serc.woods.sd
