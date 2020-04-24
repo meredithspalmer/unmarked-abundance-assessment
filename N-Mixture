@@ -22,7 +22,7 @@ nboots <- 1000
 newdf <- NULL; newday <- NULL; nightdf <- NULL; newhab <- NULL
 
 # n-mix ALL function 
-nmix_all <- function(d, indices, species, distribution, grumeti, nboots){ 
+nmix_all <- function(d, indices, species, distribution, grumeti){ 
   data <- d[indices,]
   
   # K_est = 10x predicted ABUNDANCE 
