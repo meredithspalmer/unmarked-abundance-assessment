@@ -152,7 +152,7 @@ spNmix <- function(n, X, M, niters, xlims, ylims, tune=c(0.1, 0.1, 2),
 }
 
 # secr functions 
-secr.all <- function(d, indices, species, effort, hab, locstum, grumeti){
+secr.all <- function(d, indices, species, effort, hab, locsutm, grumeti){
   # prep data
   d <- d[d$species == species,]
   data <- d[indices,]
@@ -203,7 +203,7 @@ secr.all <- function(d, indices, species, effort, hab, locstum, grumeti){
   return(x)
 }
   
-secr.day <- function(d, indices, species, effort, hab, locstum, grumeti){
+secr.day <- function(d, indices, species, effort, hab, locsutm, grumeti){
   # prep data
   d <- d[d$species == species,]
   data <- d[indices,]
@@ -254,7 +254,7 @@ secr.day <- function(d, indices, species, effort, hab, locstum, grumeti){
   return(x)
 }
 
-secr.night <- function(d, indices, species, effort, hab, locstum, grumeti){
+secr.night <- function(d, indices, species, effort, hab, locsutm, grumeti){
   # prep data
   d <- d[d$species == species,]
   data <- d[indices,]
@@ -306,7 +306,7 @@ secr.night <- function(d, indices, species, effort, hab, locstum, grumeti){
   return(x)
 }
 
-secr.plains <- function(d, indices, species, effort, hab, locstum, grumeti){
+secr.plains <- function(d, indices, species, effort, hab, locsutm, grumeti){
   # prep data
   d <- d[d$species == species,]
   data <- d[indices,]
@@ -358,7 +358,7 @@ secr.plains <- function(d, indices, species, effort, hab, locstum, grumeti){
   return(x)
 }
 
-secr.woods <- function(d, indices, species, effort, hab, locstum, grumeti){
+secr.woods <- function(d, indices, species, effort, hab, locsutm, grumeti){
   # prep data
   d <- d[d$species == species,]
   data <- d[indices,]
@@ -414,7 +414,7 @@ secr.woods <- function(d, indices, species, effort, hab, locstum, grumeti){
 
 newdf <- NULL
 
-secr.all.boot <- boot(d=dat, species=species, effort=effort, hab=hab, locstum=locstum, grumeti=grumeti,
+secr.all.boot <- boot(d=dat, species=species, effort=effort, hab=hab, locsutm=locsutm, grumeti=grumeti,
                       R = nboots, statistic = secr.all)
 secr.all.ci <- boot.ci(serc.all.boot, conf=0.95, type="perc")
 secr.all.sd <- sd(secr.all.boot$t)
@@ -427,7 +427,7 @@ newdf$boot.lCI.perc[1] <- serc.all.ci$percent[4]
 newdf$boot.sd.perc[1] <- serc.all.sd
 newdf <- data.frame(newdf)
 
-secr.day.boot <- boot(d=dat, species=species, effort=effort, hab=hab, locstum=locstum, grumeti=grumeti,
+secr.day.boot <- boot(d=dat, species=species, effort=effort, hab=hab, locsutm=locsutm, grumeti=grumeti,
                       R = nboots, statistic = secr.day)
 secr.day.ci <- boot.ci(serc.day.boot, conf=0.95, type="perc")
 secr.day.sd <- sd(secr.day.boot$t)
@@ -439,7 +439,7 @@ newdf$boot.uCI.perc[2] <- serc.day.ci$percent[5]
 newdf$boot.lCI.perc[2] <- serc.day.ci$percent[4]  
 newdf$boot.sd.perc[2] <- serc.day.sd
 
-secr.night.boot <- boot(d=dat, species=species, effort=effort, hab=hab, locstum=locstum, grumeti=grumeti,
+secr.night.boot <- boot(d=dat, species=species, effort=effort, hab=hab, locsutm=locsutm, grumeti=grumeti,
                       R = nboots, statistic = secr.night)
 secr.night.ci <- boot.ci(serc.night.boot, conf=0.95, type="perc")
 secr.night.sd <- sd(secr.night.boot$t)
@@ -451,7 +451,7 @@ newdf$boot.uCI.perc[3] <- serc.night.ci$percent[5]
 newdf$boot.lCI.perc[3] <- serc.night.ci$percent[4]  
 newdf$boot.sd.perc[3] <- serc.night.sd
 
-secr.plains.boot <- boot(d=dat, species=species, effort=effort, hab=hab, locstum=locstum, grumeti=grumeti,
+secr.plains.boot <- boot(d=dat, species=species, effort=effort, hab=hab, locsutm=locsutm, grumeti=grumeti,
                         R = nboots, statistic = secr.plains)
 secr.plains.ci <- boot.ci(serc.plains.boot, conf=0.95, type="perc")
 secr.plains.sd <- sd(secr.plains.boot$t)
@@ -463,7 +463,7 @@ newdf$boot.uCI.perc[4] <- serc.plains.ci$percent[5]
 newdf$boot.lCI.perc[4] <- serc.plains.ci$percent[4]  
 newdf$boot.sd.perc[4] <- serc.plains.sd
 
-secr.woods.boot <- boot(d=dat, species=species, effort=effort, hab=hab, locstum=locstum, grumeti=grumeti,
+secr.woods.boot <- boot(d=dat, species=species, effort=effort, hab=hab, locsutm=locsutm, grumeti=grumeti,
                          R = nboots, statistic = secr.woods)
 secr.woods.ci <- boot.ci(serc.woods.boot, conf=0.95, type="perc")
 secr.woods.sd <- sd(secr.woods.boot$t)
