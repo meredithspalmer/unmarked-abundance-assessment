@@ -195,7 +195,6 @@ secr.all <- function(d, indices, species, effort, hab, locsutm, grumeti){
   sppdat <- grumeti[grumeti$species == species,]
   M <- sppdat$counts * 2
   niters <- 10000 
-  nboots <- 10000 
   
   m1 <- spNmix(n = n.all, X = X.all, M=M, niters=niters, xlims=xlims, ylims=ylims)
   x <- mean(m1$out[,4]) #mean
@@ -247,7 +246,6 @@ secr.day <- function(d, indices, species, effort, hab, locsutm, grumeti){
   sppdat <- grumeti[grumeti$species == species,]
   M <- sppdat$counts * 2
   niters <- 10000 
-  nboots <- 10000 
   
   m4 <- spNmix(n = n.day, X = X.day, M=M, niters=niters, xlims=xlims, ylims=ylims) 
   x <- mean(m4$out[,4]) #mean
@@ -299,7 +297,6 @@ secr.night <- function(d, indices, species, effort, hab, locsutm, grumeti){
   sppdat <- grumeti[grumeti$species == species,]
   M <- sppdat$counts * 2
   niters <- 10000 
-  nboots <- 10000 
   
   m5 <- spNmix(n = n.night, X = X.night, M=M, niters=10000, xlims=xlims, ylims=ylims)
   x <- mean(m5$out[,4]) #mean
@@ -350,7 +347,6 @@ secr.plains <- function(d, indices, species, effort, hab, locsutm, grumeti){
   sppdat <- grumeti[grumeti$species == species,]
   M <- sppdat$counts * 2
   niters <- 10000 
-  nboots <- 10000 
   
   m3 <- spNmix(n = n.plain, X = X.plain, M=M, niters=niters, xlims=xlims.plain, ylims=ylims.plain)
   x <- mean(m3$out[,4]) #mean
@@ -402,7 +398,6 @@ secr.woods <- function(d, indices, species, effort, hab, locsutm, grumeti){
   sppdat <- grumeti[grumeti$species == species,]
   M <- sppdat$counts * 2
   niters <- 10000 
-  nboots <- 10000 
   
   m2 <- spNmix(n = n.wood, X = X.wood, M=M, niters=niters, xlims=xlims.wood, ylims=ylims.wood)
   x <- mean(m2$out[,4]) #mean
@@ -413,6 +408,7 @@ secr.woods <- function(d, indices, species, effort, hab, locsutm, grumeti){
 ## bootstrap secr 
 
 newdf <- NULL
+nboots <- 10000 
 
 secr.all.boot <- boot(d=dat, species=species, effort=effort, hab=hab, locsutm=locsutm, grumeti=grumeti,
                       R = nboots, statistic = secr.all)
