@@ -43,7 +43,7 @@ rem_hab <- function(d, indices, tm_wood, tm_plains, v,woodsites, plainsites){
   trm2 <- pi / (v * r_kilometers * (2 + theta))
   
   REM_wood <- trm1_wood * trm2; REM_plains <- trm1_plain * trm2
-  REM_total <- (REM_wood/length(woodsites)) + (REM_plains/length(plainsites))
+  REM_total <- ((REM_wood*length(woodsites)) + (REM_plains*length(plainsites)))/(length(woodsites) + length(plainsites))
   
   # Return overall REM 
   return(REM_total)
